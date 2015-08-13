@@ -87,17 +87,17 @@ int bb_getattr(const char *path, struct stat *statbuf)
 {
     int retstat = 0;
     char fpath[PATH_MAX];
-    
+
     log_msg("\nbb_getattr(path=\"%s\", statbuf=0x%08x)\n",
 	  path, statbuf);
     bb_fullpath(fpath, path);
-    
+
     retstat = lstat(fpath, statbuf);
     if (retstat != 0)
 	retstat = bb_error("bb_getattr lstat");
-    
+
     log_stat(statbuf);
-    
+
     return retstat;
 }
 
@@ -383,6 +383,7 @@ int bb_open(const char *path, struct fuse_file_info *fi)
     return retstat;
 }
 
+#if (FUSE_VERSION < 29)
 /** Read data from an open file
  *
  * Read should return exactly the number of bytes requested except
@@ -442,6 +443,97 @@ int bb_write(const char *path, const char *buf, size_t size, off_t offset,
     
     return retstat;
 }
+
+#else /* if (FUSE_VERSION < 29) */
+
+/** Write contents of buffer to an open file
+ *
+ * Similar to the write() method, but data is supplied in a
+ * generic buffer.
+ *
+ * Introduced in version 2.9
+ */
+
+/* fuse_bufvec handle helpers
+ */
+const struct fuse_buf *bb_fuse_bufvec_current(const struct fuse_bufvec *bufv)
+{
+	if (bufv->idx < bufv->count)
+		return &bufv->buf[bufv->idx];
+	else
+		return NULL;
+}
+
+static int bb_fuse_bufvec_advance(struct fuse_bufvec *bufv, size_t len)
+{
+	const struct fuse_buf *buf = bb_fuse_bufvec_current(bufv);
+
+	bufv->off += len;
+	if (bufv->off == buf->size) {
+		bufv->idx++;
+		if (bufv->idx == bufv->count)
+			return 0;
+		bufv->off = 0;
+	}
+	return 1;
+}
+
+/* prototype for read_buf()
+ */
+int bb_read_buf(const char *path, struct fuse_bufvec *bufv, off_t offset, struct fuse_file_info *fi)
+{
+    int retstat = 0;
+
+    log_msg("\nbb_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
+	    path, buf, size, offset, fi);
+    // no need to get fpath on this one, since I work from fi->fh not the path
+    log_fi(fi);
+
+    retstat = pread(fi->fh, buf, size, offset);
+    if (retstat < 0)
+	retstat = bb_error("bb_read read");
+
+    return retstat;
+}
+
+
+/* prototype for write_buf()
+ */
+int bb_write_buf(const char *path, struct fuse_bufvec *bufv, off_t offset, struct fuse_file_info *fi)
+{
+    int res = 0;
+    ssize_t count = 0;
+    off_t current_offset = offset;
+
+    log_msg("\nbb_write_buf(path=\"%s\", bufv=0x%08x, offset=%lld, fi=0x%08x)\n",
+	    path, bufv, offset, fi
+	    );
+    log_fi(fi);
+
+    for (;;) {
+        const struct fuse_buf *buf = bb_fuse_bufvec_current(bufv);
+        if (buf == NULL)
+            break;
+
+        res = pwrite(fi->fh, buf->mem, buf->size, current_offset);
+        if (res < 0) {
+            res = bb_error("bb_write pwrite");
+            break;
+        }
+        log_msg("    wrote %u byte from bufv.buf[%u]\n", res, bufv->idx);
+
+        current_offset += res;
+        count += res;
+
+        if (!bb_fuse_bufvec_advance(bufv, res) || (res < buf->size)) {
+            res = count;
+            break;
+        }
+    }
+    return res;
+}
+
+#endif /* if (FUSE_VERSION < 29) */
 
 /** Get file system statistics
  *
@@ -944,8 +1036,13 @@ struct fuse_operations bb_oper = {
   .truncate = bb_truncate,
   .utime = bb_utime,
   .open = bb_open,
+#if (FUSE_VERSION < 29)
   .read = bb_read,
   .write = bb_write,
+#else
+  .read_buf = bb_read_buf,
+  .write_buf = bb_write_buf,
+#endif
   /** Just a placeholder, don't set */ // huh???
   .statfs = bb_statfs,
   .flush = bb_flush,
