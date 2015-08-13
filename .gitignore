@@ -1,0 +1,15 @@
+Makefile
+autom4te.cache/
+config.log
+config.status
+example/bbfs.log
+example/log
+example/rootdir/
+example/mountdir/
+html/Makefile
+src/.deps/
+src/Makefile
+src/bbfs
+src/*.o
+src/config.h
+src/stamp-h1
